@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:map_box_example/services/location_service.dart';
 import 'package:mapbox_maps_flutter/mapbox_maps_flutter.dart';
-import 'package:geolocator/geolocator.dart' as geo;
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -12,15 +12,25 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   MapboxMap? mapboxMap;
   String style = MapboxStyles.STANDARD;
-  void onChangeMapStyle() {
+
+  // Riyadh coordinates
+  final Point riyadhCenter = Point(
+    coordinates: Position(46.6753, 24.7136), // Riyadh coordinates (lng, lat)
+  );
+
+  // Saudi Arabia center coordinates for country view
+  final Point saudiArabiaCenter = Point(
+    coordinates: Position(45.0792, 23.8859), // Saudi Arabia center (lng, lat)
+  );
+
+  Future<void> onChangeMapStyle() async {
     setState(() {
       style = style == MapboxStyles.STANDARD
           ? MapboxStyles.SATELLITE_STREETS
           : MapboxStyles.STANDARD;
     });
-    // Update the map style immediately after state change
     if (mapboxMap != null) {
-      mapboxMap!.loadStyleURI(style);
+      await mapboxMap!.loadStyleURI(style);
     }
   }
 
@@ -28,9 +38,41 @@ class _MapScreenState extends State<MapScreen> {
     this.mapboxMap = mapboxMap;
     _updateMapStyle();
     mapboxMap.location.updateSettings(LocationComponentSettings(enabled: true));
+
+    // Start the animation sequence
+    _performRiyadhAnimation();
   }
 
-  void _updateMapStyle() {
+  Future<void> _performRiyadhAnimation() async {
+    if (mapboxMap == null) return;
+
+    try {
+      // First, zoom into Riyadh city
+      await mapboxMap!.easeTo(
+        CameraOptions(
+          center: riyadhCenter,
+          zoom: 12.0, // City level zoom
+        ),
+        MapAnimationOptions(duration: 1500), // 1.5 seconds to zoom in
+      );
+
+      // Wait for 2 seconds while showing Riyadh
+      await Future.delayed(const Duration(seconds: 2));
+
+      // Then zoom out to show all of Saudi Arabia
+      await mapboxMap!.easeTo(
+        CameraOptions(
+          center: saudiArabiaCenter,
+          zoom: 5.5, // Country level zoom to show all Saudi Arabia
+        ),
+        MapAnimationOptions(duration: 2000), // 2 seconds to zoom out
+      );
+    } catch (e) {
+      print('Error during Riyadh animation: $e');
+    }
+  }
+
+  Future<void> _updateMapStyle() async {
     var configs = {
       "lightPreset": 'day',
       "theme": 'faded',
@@ -60,61 +102,29 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _zoomToCurrentLocation() async {
-    bool serviceEnabled;
-    geo.LocationPermission permission;
-
-    // Test if location services are enabled.
-    serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      // Location services are not enabled don't continue
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Location services are disabled.')),
-      );
-      return;
-    }
-
-    permission = await geo.Geolocator.checkPermission();
-    if (permission == geo.LocationPermission.denied) {
-      permission = await geo.Geolocator.requestPermission();
-      if (permission == geo.LocationPermission.denied) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Location permissions are denied')),
-        );
-        return;
-      }
-    }
-
-    if (permission == geo.LocationPermission.deniedForever) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Location permissions are permanently denied, we cannot request permissions.',
-          ),
-        ),
-      );
-      return;
-    }
-
-    // When we reach here, permissions are granted and we can
-    // continue accessing the position of the device.
+    LocationService locationService = LocationService();
     try {
-      geo.Position position = await geo.Geolocator.getCurrentPosition(
-        desiredAccuracy: geo.LocationAccuracy.high,
+      // Import geolocator Position as geoPosition to avoid conflict
+      final geoPosition = await locationService.getCurrentLocation();
+      // Convert geolocator Position to geotypes Position
+      final mapPosition = Point(
+        coordinates: Position(geoPosition.longitude, geoPosition.latitude),
       );
-
       mapboxMap?.easeTo(
-        CameraOptions(
-          center: Point(
-            coordinates: Position(position.longitude, position.latitude),
-          ),
-          zoom: 15.0,
-        ),
-        MapAnimationOptions(duration: 1000),
+        CameraOptions(center: mapPosition, zoom: 15.0),
+        MapAnimationOptions(duration: 500),
       );
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error getting location: $e')));
+      print('Error getting current location: $e');
+      // Show error message to user
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to get current location: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -126,7 +136,9 @@ class _MapScreenState extends State<MapScreen> {
           MapWidget(
             onMapCreated: _onMapCreated,
             cameraOptions: CameraOptions(
-              center: Point(coordinates: Position(30.8025, 26.8206)),
+              center: Point(
+                coordinates: Position(30.8025, 26.8206),
+              ), // Initial position (will be animated)
               zoom: 5.0,
             ),
             styleUri: style,
@@ -135,11 +147,24 @@ class _MapScreenState extends State<MapScreen> {
           Positioned(
             top: 50,
             right: 20,
-            child: IconButton(
-              onPressed: () {
-                onChangeMapStyle();
-              },
-              icon: Icon(Icons.layers, size: 30, color: Colors.red),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 4,
+                    offset: Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: IconButton(
+                onPressed: () {
+                  onChangeMapStyle();
+                },
+                icon: Icon(Icons.layers, size: 30, color: Colors.red),
+              ),
             ),
           ),
           Positioned(
